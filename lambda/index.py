@@ -4,9 +4,26 @@ import os
 import boto3
 import re  # 正規表現モジュールをインポート
 from botocore.exceptions import ClientError
+import urllib.request
 
 
-# Lambda コンテキストからリージョンを抽出する関数
+
+
+def call_external_api(message, history, url=" https://9134-35-247-163-20.ngrok-free.app/chat"):
+        payload = {
+                "message": message,
+                "conversationHistory": history
+                            }
+        req = urllib.request.Request(
+                                        url,
+                                        data=json.dumps(payload).encode("utf-8"),
+                                        headers={"Content-Type": "application/json"},
+                                        method="POST"
+                                                                    )
+        with urllib.request.urlopen(req) as res:
+            return json.loads(res.read().decode("utf-8"))
+
+# Lambdt コンテキストからリージョンを抽出する関数
 def extract_region_from_arn(arn):
     # ARN 形式: arn:aws:lambda:region:account-id:function:function-name
     match = re.search('arn:aws:lambda:([^:]+):', arn)
@@ -15,7 +32,6 @@ def extract_region_from_arn(arn):
     return "us-east-1"  # デフォルト値
 
 # グローバル変数としてクライアントを初期化（初期値）
-bedrock_client = None
 
 # モデルID
 MODEL_ID = os.environ.get("MODEL_ID", "us.amazon.nova-lite-v1:0")
@@ -83,14 +99,14 @@ def lambda_handler(event, context):
         print("Calling Bedrock invoke_model API with payload:", json.dumps(request_payload))
         
         # invoke_model APIを呼び出し
-        response = bedrock_client.invoke_model(
-            modelId=MODEL_ID,
-            body=json.dumps(request_payload),
-            contentType="application/json"
-        )
+        ##response = bedrock_client.invoke_model(
+          #  modelId=MODEL_ID,
+           # body=json.dumps(request_payload),
+           # contentType="application/json"
+           # )
         
         # レスポンスを解析
-        response_body = json.loads(response['body'].read())
+        response_body = call_external_api(message, messages)#json.loads(response['body'].read())
         print("Bedrock response:", json.dumps(response_body, default=str))
         
         # 応答の検証
@@ -99,7 +115,7 @@ def lambda_handler(event, context):
         
         # アシスタントの応答を取得
         assistant_response = response_body['output']['message']['content'][0]['text']
-        
+
         # アシスタントの応答を会話履歴に追加
         messages.append({
             "role": "assistant",
@@ -137,4 +153,8 @@ def lambda_handler(event, context):
                 "success": False,
                 "error": str(error)
             })
-        }
+        
+
+
+
+            }
