@@ -9,7 +9,7 @@ import urllib.request
 
 
 
-def call_external_api(message, history, url=" https://9134-35-247-163-20.ngrok-free.app/chat"):
+def call_external_api(message, history, url=" https://9134-35-247-163-20.ngrok-free.app/predict"):
         payload = {
                 "message": message,
                 "conversationHistory": history
