@@ -1,45 +1,113 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+# lambda/index.py
 import json
+import os
+import re
 import urllib.request
+import urllib.error  # エラーハンドリング用
 
-app = FastAPI()
+# ngrokで公開したFastAPIエンドポイント
+NGROK_URL = "https://059f-34-125-46-83.ngrok-free.app/generate"  # ★ここにあなたのURLを貼り付けてください
 
-EXTERNAL_API_URL = "https://6ef9-34-16-195-216.ngrok-free.app/generate"
+# Lambda コンテキストからリージョンを抽出する関数（使わないけど残しておいてOK）
+def extract_region_from_arn(arn):
+    match = re.search('arn:aws:lambda:([^:]+):', arn)
+    if match:
+        return match.group(1)
+    return "us-east-1"
 
-@app.post("/generate")
-async def chat(request: Request):
+def lambda_handler(event, context):
     try:
-        body = await request.json()
-        message = body.get("message", "")
+        print("Received event:", json.dumps(event))
+
+        # Cognitoで認証されたユーザー情報の取得（必要に応じて）
+        user_info = None
+        if 'requestContext' in event and 'authorizer' in event['requestContext']:
+            user_info = event['requestContext']['authorizer']['claims']
+            print(f"Authenticated user: {user_info.get('email') or user_info.get('cognito:username')}")
+
+        # リクエストボディの解析
+        body = json.loads(event['body'])
+        message = body['prompt'] # もともとbody["message"]
+        conversation_history = body.get('conversationHistory', [])
+
+        print("Processing message:", message)
+
+        # 会話履歴を構築
+        messages = conversation_history.copy()
+        messages.append({
+            "role": "user",
+            "content": message
+        })
         
-        # 外部APIに送信するペイロード
-        payload = {
-            "message": message
+        # FastAPI用に整形したリクエスト形式（例：OpenAI chat形式に近い構造）
+        request_payload = {
+        "prompt": message,
+        "max_new_tokens": 512,
+        "do_sample": True,
+        "temperature": 0.7,
+        "top_p": 0.9
         }
-        
-        # 外部APIの呼び出しに必要なヘッダーとペイロード設定
+
+        print("Calling ngrok FastAPI endpoint with payload:", json.dumps(request_payload))
+
+        # FastAPIへリクエスト送信
         req = urllib.request.Request(
-            EXTERNAL_API_URL,
-            data=json.dumps(payload).encode(),  # ペイロードをJSONとしてエンコード
-            headers={"Content-Type": "application/json"},  # ヘッダーを設定
-            method="POST"  # POSTメソッドを指定
+            NGROK_URL,
+            data=json.dumps(request_payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST'
         )
-        
-        # 外部APIのレスポンスを取得
+
         with urllib.request.urlopen(req) as res:
-            response_body = res.read()  # レスポンスを読み取る
-            response_json = json.loads(response_body)  # JSONに変換
+            response_body = json.loads(res.read().decode('utf-8'))
 
-        # レスポンスをJSON形式で返す
-        return JSONResponse(content={
-            "success": True,
-            "response": response_json.get("response", "No response")  # "response"キーがなければ"No response"を返す
+        print("Ngrok FastAPI response:", json.dumps(response_body))
+
+        # 応答の取得（FastAPIが {"response": "..."} を返す前提）
+        assistant_response = response_body.get("generated_text")
+        if not assistant_response:
+            raise Exception("No response content from FastAPI model")
+
+        # 応答を履歴に追加
+        messages.append({
+            "role": "assistant",
+            "content": assistant_response
         })
 
-    except Exception as e:
-        # エラーが発生した場合は500エラーを返す
-        return JSONResponse(status_code=500, content={
-            "success": False,
-            "error": str(e)  # エラーメッセージを返す
-        })
+        # 成功レスポンス
+        return {
+            "statusCode": 200,
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
+                "Access-Control-Allow-Methods": "OPTIONS,POST"
+            },
+            "body": json.dumps({
+            "generated_text": assistant_response,
+            "response_time": 0
+            })
+        }
+
+    except urllib.error.HTTPError as e:
+        print("HTTPError:", e.code, e.reason)
+        return {
+            "statusCode": e.code,
+            "body": json.dumps({"success": False, "error": e.reason})
+        }
+
+    except Exception as error:
+        print("Error:", str(error))
+        return {
+            "statusCode": 500,
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
+                "Access-Control-Allow-Methods": "OPTIONS,POST"
+            },
+            "body": json.dumps({
+                "success": False,
+                "error": str(error)
+            })
+        }
